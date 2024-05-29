@@ -232,10 +232,12 @@ namespace Haukcode.KiNet
         {
             while (!this.shutdownCTS.IsCancellationRequested)
             {
-                var sendData = this.sendQueue.Take(this.shutdownCTS.Token);
+                SendData sendData = null;
 
                 try
                 {
+                    sendData = this.sendQueue.Take(this.shutdownCTS.Token);
+
                     if (sendData.AgeMS > 100)
                     {
                         // Old, discard
@@ -272,7 +274,7 @@ namespace Haukcode.KiNet
                 finally
                 {
                     // Return to pool
-                    sendData.Data.Dispose();
+                    sendData?.Data?.Dispose();
                 }
             }
         }
