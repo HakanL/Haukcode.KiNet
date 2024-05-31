@@ -9,7 +9,7 @@ public class DiscoverSupplies2Request : BasePacket
 
     public override ushort Type => HeaderType;
 
-    public override int Length => 12;
+    protected override int PacketPayloadLength => 8;
 
     public byte Something { get; set; } = 0x01;
 

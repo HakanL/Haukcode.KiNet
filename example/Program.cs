@@ -31,22 +31,12 @@ namespace Haukcode.KiNet.ConsoleExample
                 Console.WriteLine($"Error! {e.Message}");
             });
 
-            double last = 0;
-            client.OnPacket.Subscribe(d =>
-            {
-                Listener_OnPacket(d.TimestampMS, d.TimestampMS - last, d.Packet);
-                last = d.TimestampMS;
-            });
+            //var test = new DiscoverMadrix(client);
+            var test = new EmulateV3(client);
 
             client.StartReceive();
 
-            Console.WriteLine("Sending DiscoverSupplies packet");
-
-            // Send 10 of the discover packets
-            for (int i = 0; i < 10; i++)
-                client.SendPacket(new DiscoverSupplies2Request());
-
-            client.SendPacket(new DiscoverSupplies3Request());
+            test.Execute();
             /*            while (true)
                         {
                             client.SendDmxBroadcast(1, new byte[] { 1, 2, 3, 4, 5 });
@@ -57,28 +47,6 @@ namespace Haukcode.KiNet.ConsoleExample
             Console.ReadLine();
 
             client.Dispose();
-        }
-
-        private static void Listener_OnPacket(double timestampMS, double sinceLast, BasePacket e)
-        {
-            Console.Write($"+{sinceLast:N2}\t");
-            Console.Write($"Packet type {e.GetType().Name}\t");
-
-            switch (e)
-            {
-                case DiscoverSupplies3Response reply3:
-                    Console.Write($"From: {reply3.SourceIP}");
-
-                    client.SendPacket(new DiscoverSupplyRequest());
-                    client.SendPacket(new SupplyReadPropertiesRequest());
-                    break;
-            }
-
-            Console.WriteLine("");
-
-            var dataPacket = e as DmxOutPacket;
-            if (dataPacket == null)
-                return;
         }
     }
 }

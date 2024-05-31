@@ -9,13 +9,24 @@ public class DiscoverSuppliesRequest : BasePacket
 
     public override ushort Type => HeaderType;
 
-    public override int Length => 12;
+    protected override int PacketPayloadLength => 8;
 
-    public uint Command { get; set; } = 0x8901a8c0;
+    public System.Net.IPAddress SourceIP { get; set; }
 
     internal override void WritePacket(LittleEndianBinaryWriter writer)
     {
         writer.WriteUInt32(Sequence);
-        writer.WriteUInt32(Command);
+        writer.WriteBytes(SourceIP.GetAddressBytes());
+    }
+
+    public DiscoverSuppliesRequest(System.Net.IPAddress sourceIP)
+    {
+        SourceIP = sourceIP;
+    }
+
+    public DiscoverSuppliesRequest(LittleEndianBinaryReader reader)
+    {
+        Sequence = reader.ReadUInt32();
+        SourceIP = new System.Net.IPAddress(reader.ReadBytes(4));
     }
 }

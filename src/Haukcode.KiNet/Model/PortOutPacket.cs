@@ -4,14 +4,14 @@ namespace Haukcode.KiNet.Model;
 
 public class PortOutPacket : BasePacket
 {
-    public const ushort HeaderVersion = 0x0001;
+    public const ushort HeaderVersion = 0x0002;
     public const ushort HeaderType = 0x0108;
 
     public override ushort Version => HeaderVersion;
 
     public override ushort Type => HeaderType;
 
-    public override int Length => 24 + DMXData.Length;
+    protected override int PacketPayloadLength => 16 + DMXData.Length;
 
     private const ushort MinDMXDataLength = 24;
 

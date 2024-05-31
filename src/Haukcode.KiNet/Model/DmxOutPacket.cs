@@ -11,7 +11,7 @@ public class DmxOutPacket : BasePacket
 
     public override ushort Type => HeaderType;
 
-    public override int Length => 21 + Math.Max(MinDMXDataLength, DMXData.Length);
+    protected override int PacketPayloadLength => 13 + Math.Max(MinDMXDataLength, DMXData.Length);
 
     private const ushort MinDMXDataLength = 24;
 

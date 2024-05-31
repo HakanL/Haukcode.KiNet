@@ -9,7 +9,7 @@ public class DiscoverSupply2Response : BasePacket
 
     public override ushort Type => HeaderType;
 
-    public override int Length => throw new NotImplementedException();
+    protected override int PacketPayloadLength => throw new NotImplementedException();
 
     public uint Something1 { get; set; } = 0xf00000c0;
     

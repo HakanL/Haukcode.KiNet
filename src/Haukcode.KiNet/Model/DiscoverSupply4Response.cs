@@ -1,9 +1,9 @@
 ﻿namespace Haukcode.KiNet.Model;
 
-public class SupplyWritePropertiesRequest : BasePacket
+public class DiscoverSupply4Response : BasePacket
 {
     public const ushort HeaderVersion = 0x0001;
-    public const ushort HeaderType = 0x0103;
+    public const ushort HeaderType = 0x000b;
 
     public override ushort Version => HeaderVersion;
 
@@ -11,8 +11,8 @@ public class SupplyWritePropertiesRequest : BasePacket
 
     protected override int PacketPayloadLength => throw new NotImplementedException();
 
-    public uint Something1 { get; set; } = 0x000000c0;
-
+    public uint Something1 { get; set; } = 0xf00000c0;
+    
     public uint Something2 { get; set; } = 0;
 
     internal override void WritePacket(LittleEndianBinaryWriter writer)
@@ -20,7 +20,7 @@ public class SupplyWritePropertiesRequest : BasePacket
         throw new NotImplementedException();
     }
 
-    public SupplyWritePropertiesRequest(LittleEndianBinaryReader reader)
+    public DiscoverSupply4Response(LittleEndianBinaryReader reader)
     {
         Sequence = reader.ReadUInt32();
         Something1 = reader.ReadUInt32();

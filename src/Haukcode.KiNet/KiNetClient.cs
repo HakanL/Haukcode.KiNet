@@ -16,6 +16,8 @@ namespace Haukcode.KiNet
 {
     public class KiNetClient : IDisposable
     {
+        public const int DefaultPort = 6038;
+
         public class SendSocketData
         {
             public Socket Socket;
@@ -101,13 +103,13 @@ namespace Haukcode.KiNet
             this.socket.EnableBroadcast = true;
             this.socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
 
-            this.localEndPoint = new IPEndPoint(localAddress, Port);
+            this.localEndPoint = new IPEndPoint(localAddress, DefaultPort);
             // Linux wants Any to get multicast/broadcast packets
-            this.socket.Bind(new IPEndPoint(bindAddress ?? localAddress, Port));
+            this.socket.Bind(new IPEndPoint(bindAddress ?? localAddress, this.localEndPoint.Port));
 
             this.socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Broadcast, 1);
 
-            this.broadcastEndPoint = new IPEndPoint(GetBroadcastAddress(localAddress, localSubnetMask), Port);
+            this.broadcastEndPoint = new IPEndPoint(GetBroadcastAddress(localAddress, localSubnetMask), this.localEndPoint.Port);
 
             this.receiveTask = Task.Run(Receiver);
             this.sendTask = Task.Run(Sender);
@@ -115,7 +117,7 @@ namespace Haukcode.KiNet
 
         public bool IsOperational => !this.shutdownCTS.IsCancellationRequested;
 
-        public int Port => 6038;
+        public IPEndPoint LocalEndPoint => this.localEndPoint;
 
         public IObservable<Exception> OnError => this.errorSubject.AsObservable();
 
@@ -164,7 +166,9 @@ namespace Haukcode.KiNet
                     // Capture the timestamp first so it's as accurate as possible
                     double timestampMS = this.clock.Elapsed.TotalMilliseconds;
 
-                    if (result.RemoteEndPoint.Equals(this.localEndPoint))
+                    var destAddress = (result.RemoteEndPoint as IPEndPoint)?.Address;
+
+                    if (result.RemoteEndPoint.Equals(this.localEndPoint) && destAddress?.Equals(result.PacketInformation.Address) == false)
                         // Filter out our own
                         continue;
 
@@ -185,7 +189,7 @@ namespace Haukcode.KiNet
 
                             if (!this.endPointCache.TryGetValue(result.PacketInformation.Address, out var ipEndPoint))
                             {
-                                ipEndPoint = new IPEndPoint(result.PacketInformation.Address, Port);
+                                ipEndPoint = new IPEndPoint(result.PacketInformation.Address, this.localEndPoint.Port);
                                 this.endPointCache.Add(result.PacketInformation.Address, ipEndPoint);
                             }
 
@@ -346,7 +350,7 @@ namespace Haukcode.KiNet
         {
             if (!this.endPointCache.TryGetValue(destination, out var ipEndPoint))
             {
-                ipEndPoint = new IPEndPoint(destination, Port);
+                ipEndPoint = new IPEndPoint(destination, this.localEndPoint.Port);
                 this.endPointCache.Add(destination, ipEndPoint);
             }
 

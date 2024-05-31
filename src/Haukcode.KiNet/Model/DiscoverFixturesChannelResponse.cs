@@ -10,7 +10,7 @@ public class DiscoverFixturesChannelResponse : BasePacket
     public override ushort Type => HeaderType;
 
 
-    public override int Length => 14;
+    protected override int PacketPayloadLength => 12;
 
     public System.Net.IPAddress Address { get; set; }
 
