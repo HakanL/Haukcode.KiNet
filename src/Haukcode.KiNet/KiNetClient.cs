@@ -234,52 +234,59 @@ namespace Haukcode.KiNet
 
         private async Task Sender()
         {
-            while (!this.shutdownCTS.IsCancellationRequested)
+            try
             {
-                SendData sendData = null;
-
-                try
+                while (!this.shutdownCTS.IsCancellationRequested)
                 {
-                    sendData = this.sendQueue.Take(this.shutdownCTS.Token);
+                    SendData sendData = null;
 
-                    if (sendData.AgeMS > 100)
+                    try
                     {
-                        // Old, discard
-                        this.droppedPackets++;
-                        //Console.WriteLine($"Age {sendData.Enqueued.Elapsed.TotalMilliseconds:N2}   queue length = {this.sendQueue.Count}   Dropped = {this.droppedPackets}");
-                        continue;
+                        sendData = this.sendQueue.Take(this.shutdownCTS.Token);
+
+                        if (sendData.AgeMS > 100)
+                        {
+                            // Old, discard
+                            this.droppedPackets++;
+                            //Console.WriteLine($"Age {sendData.Enqueued.Elapsed.TotalMilliseconds:N2}   queue length = {this.sendQueue.Count}   Dropped = {this.droppedPackets}");
+                            continue;
+                        }
+
+                        var destination = sendData.Destination ?? this.broadcastEndPoint;
+
+                        var watch = Stopwatch.StartNew();
+                        if (destination != null)
+                            await this.socket.SendToAsync(sendData.Data.Memory[..sendData.DataLength], SocketFlags.None, destination);
+                        watch.Stop();
+
+                        if (watch.ElapsedMilliseconds > 20)
+                            this.slowSends++;
                     }
-
-                    var destination = sendData.Destination ?? this.broadcastEndPoint;
-
-                    var watch = Stopwatch.StartNew();
-                    if (destination != null)
-                        await this.socket.SendToAsync(sendData.Data.Memory[..sendData.DataLength], SocketFlags.None, destination);
-                    watch.Stop();
-
-                    if (watch.ElapsedMilliseconds > 20)
-                        this.slowSends++;
-                }
-                catch (Exception ex)
-                {
-                    if (ex is OperationCanceledException)
-                        continue;
-
-                    //Console.WriteLine($"Exception in Sender handler: {ex.Message}");
-                    this.errorSubject.OnNext(ex);
-
-                    if (ex is System.Net.Sockets.SocketException)
+                    catch (Exception ex)
                     {
-                        // Network unreachable
-                        this.shutdownCTS.Cancel();
-                        break;
+                        if (ex is OperationCanceledException)
+                            continue;
+
+                        //Console.WriteLine($"Exception in Sender handler: {ex.Message}");
+                        this.errorSubject.OnNext(ex);
+
+                        if (ex is System.Net.Sockets.SocketException)
+                        {
+                            // Network unreachable
+                            this.shutdownCTS.Cancel();
+                            break;
+                        }
+                    }
+                    finally
+                    {
+                        // Return to pool
+                        sendData?.Data?.Dispose();
                     }
                 }
-                finally
-                {
-                    // Return to pool
-                    sendData?.Data?.Dispose();
-                }
+            }
+            catch (SocketException)
+            {
+                // Ignore, most likely because we're shutting down
             }
         }
 

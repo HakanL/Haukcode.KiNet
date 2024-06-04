@@ -32,7 +32,7 @@ namespace Haukcode.KiNet.ConsoleExample
             });
 
             //var test = new DiscoverMadrix(client);
-            var test = new EmulateV3(client);
+            var test = new EmulateV2(client);
 
             client.StartReceive();
 
