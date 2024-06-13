@@ -66,7 +66,7 @@ public class PortOutPacket : BasePacket
         DataLength = reader.ReadUInt16();
         StartCode = reader.ReadUInt16();
 
-        Debug.Assert(DataLength == reader.BytesLeft);
+        Debug.Assert(DataLength <= reader.BytesLeft);
 
         DMXData = reader.ReadBytes();
     }
