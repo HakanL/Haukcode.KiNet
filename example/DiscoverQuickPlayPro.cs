@@ -24,18 +24,18 @@ internal class DiscoverQuickPlayPro
         });
     }
 
-    public void Execute()
+    public async void Execute()
     {
         Console.WriteLine("Sending DiscoverSupplies packet");
 
         // Send 10 of the discover packets
         for (int i = 0; i < 10; i++)
-            this.client.SendPacket(new DiscoverSupplies2Request());
+            await this.client.QueuePacket(new DiscoverSupplies2Request());
 
-        this.client.SendPacket(new DiscoverSuppliesRequest(this.client.LocalEndPoint.Address));
+        await this.client.QueuePacket(new DiscoverSuppliesRequest(this.client.LocalEndPoint.Address));
     }
 
-    private void Listener_OnPacket(double timestampMS, double sinceLast, BasePacket e)
+    private async void Listener_OnPacket(double timestampMS, double sinceLast, BasePacket e)
     {
         Console.Write($"+{sinceLast:N2}\t");
         Console.Write($"Packet type {e.GetType().Name}\t");
@@ -45,8 +45,8 @@ internal class DiscoverQuickPlayPro
             case DiscoverSuppliesResponse reply3:
                 Console.Write($"From: {reply3.SourceIP}");
 
-                this.client.SendPacket(new DiscoverSupplyRequest());
-                this.client.SendPacket(new SupplyReadPropertiesRequest());
+                await this.client.QueuePacket(new DiscoverSupplyRequest());
+                await this.client.QueuePacket(new SupplyReadPropertiesRequest());
                 break;
         }
 

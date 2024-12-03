@@ -120,7 +120,7 @@ namespace Haukcode.KiNet
                 _ => throw new NotImplementedException(),
             };
 
-            return QueuePacket(address, packet, important);
+            return QueuePacket(packet, address, important: important);
         }
 
         /// <summary>
@@ -131,7 +131,7 @@ namespace Haukcode.KiNet
         {
             var packet = new SyncPacket();
 
-            return QueuePacket(destination, packet, true);
+            return QueuePacket(packet, destination, important: true);
         }
 
         /// <summary>
@@ -139,7 +139,7 @@ namespace Haukcode.KiNet
         /// </summary>
         /// <param name="destination">Destination</param>
         /// <param name="packet">Packet</param>
-        private async Task QueuePacket(IPAddress? destination, BasePacket packet, bool important)
+        public async Task QueuePacket(BasePacket packet, IPAddress? destination = null, bool important = false)
         {
             packet.Sequence = Interlocked.Increment(ref this.sequenceCounter);
 

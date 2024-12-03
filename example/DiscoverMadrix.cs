@@ -24,14 +24,14 @@ internal class DiscoverMadrix
         });
     }
 
-    public void Execute()
+    public async Task Execute()
     {
         Console.WriteLine("Sending DiscoverSupplies packet");
 
-        this.client.SendPacket(new DiscoverSuppliesRequest(this.client.LocalEndPoint.Address));
+        await this.client.QueuePacket(new DiscoverSuppliesRequest(this.client.LocalEndPoint.Address));
     }
 
-    private void Listener_OnPacket(double timestampMS, double sinceLast, BasePacket e)
+    private async void Listener_OnPacket(double timestampMS, double sinceLast, BasePacket e)
     {
         Console.Write($"+{sinceLast:N2}\t");
         Console.Write($"Packet type {e.GetType().Name}\t");
@@ -41,7 +41,7 @@ internal class DiscoverMadrix
             case DiscoverSuppliesResponse reply3:
                 Console.Write($"From: {reply3.SourceIP}");
 
-                this.client.SendPacket(new DiscoverPortsRequest());
+                await this.client.QueuePacket(new DiscoverPortsRequest());
                 break;
         }
 

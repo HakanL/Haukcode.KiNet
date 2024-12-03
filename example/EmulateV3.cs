@@ -29,7 +29,7 @@ internal class EmulateV3
     {
     }
 
-    private void Listener_OnPacket(double timestampMS, double sinceLast, BasePacket e)
+    private async void Listener_OnPacket(double timestampMS, double sinceLast, BasePacket e)
     {
         Console.Write($"+{sinceLast:N2}\t");
         Console.Write($"Packet type {e.GetType().Name}\t");
@@ -45,7 +45,7 @@ internal class EmulateV3
                     ProtocolVersion = 3,
                     Serial = [0x12, 0x34, 0x56, 0x78, 0, 0, 0, 0]
                 };
-                this.client.SendPacket(response1);
+                await this.client.QueuePacket(response1);
                 break;
 
             case DiscoverPortsRequest request2:
@@ -65,7 +65,7 @@ internal class EmulateV3
                         }
                     ]
                 };
-                this.client.SendPacket(response2);
+                await this.client.QueuePacket(response2);
                 break;
         }
 
