@@ -10,37 +10,18 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Threading;
 using System.Threading.Tasks;
+using Haukcode.HighPerfComm;
 using Haukcode.KiNet.Model;
 
 namespace Haukcode.KiNet
 {
-    public class KiNetClient : IDisposable
+    public class KiNetClient : Client<KiNetClient.SendData, SocketReceiveMessageFromResult>
     {
         public const int DefaultPort = 6038;
 
-        public class SendSocketData
+        public class SendData : HighPerfComm.SendData
         {
-            public Socket Socket;
-
-            public IPEndPoint Destination;
-        }
-
-        public class SendData
-        {
-            public IPEndPoint Destination;
-
-            public IMemoryOwner<byte> Data;
-
-            public int DataLength;
-
-            public Stopwatch Enqueued;
-
-            public double AgeMS => Enqueued.Elapsed.TotalMilliseconds;
-
-            public SendData()
-            {
-                Enqueued = Stopwatch.StartNew();
-            }
+            public IPEndPoint Destination { get; set; } = null!;
         }
 
         private const int ReceiveBufferSize = 20480;
@@ -48,32 +29,19 @@ namespace Haukcode.KiNet
         private static readonly IPEndPoint _blankEndpoint = new(IPAddress.Any, 0);
 
         private readonly Socket socket;
-        private readonly ISubject<Exception> errorSubject;
         private readonly ISubject<ReceiveDataPacket> packetSubject;
-        private readonly Memory<byte> receiveBufferMem;
-        private readonly Stopwatch clock = new();
-        private readonly Task receiveTask;
-        private readonly Task sendTask;
-        private readonly CancellationTokenSource shutdownCTS = new();
-        private readonly Dictionary<IPAddress, IPEndPoint> endPointCache = new();
-        private readonly BlockingCollection<SendData> sendQueue = new();
-        private readonly MemoryPool<byte> memoryPool = MemoryPool<byte>.Shared;
-        private int droppedPackets;
-        private int slowSends;
-        private readonly HashSet<IPAddress> usedDestinations = new();
+        private readonly Dictionary<IPAddress, IPEndPoint> endPointCache = [];
         private IPEndPoint broadcastEndPoint;
         private uint sequenceCounter;
         private readonly IPEndPoint localEndPoint;
 
-        public KiNetClient(IPAddress localAddress, IPAddress localSubnetMask, IPAddress bindAddress = null)
+        public KiNetClient(IPAddress localAddress, IPAddress localSubnetMask, IPAddress? bindAddress = null)
+            : base(() => new SendData(), ReceiveBufferSize)
         {
-            var receiveBuffer = GC.AllocateArray<byte>(length: ReceiveBufferSize, pinned: true);
-            this.receiveBufferMem = receiveBuffer.AsMemory();
-
-            this.errorSubject = new Subject<Exception>();
             this.packetSubject = new Subject<ReceiveDataPacket>();
 
             this.socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            this.socket.ReceiveBufferSize = ReceiveBufferSize;
             this.socket.SendBufferSize = SendBufferSize;
 
             // Set the SIO_UDP_CONNRESET ioctl to true for this UDP socket. If this UDP socket
@@ -104,117 +72,21 @@ namespace Haukcode.KiNet
             this.socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
 
             this.localEndPoint = new IPEndPoint(localAddress, DefaultPort);
+            this.broadcastEndPoint = new IPEndPoint(GetBroadcastAddress(localAddress, localSubnetMask), this.localEndPoint.Port);
+
             // Linux wants Any to get multicast/broadcast packets
             this.socket.Bind(new IPEndPoint(bindAddress ?? localAddress, this.localEndPoint.Port));
 
             this.socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Broadcast, 1);
-
-            this.broadcastEndPoint = new IPEndPoint(GetBroadcastAddress(localAddress, localSubnetMask), this.localEndPoint.Port);
-
-            this.receiveTask = Task.Run(Receiver);
-            this.sendTask = Task.Run(Sender);
         }
-
-        public bool IsOperational => !this.shutdownCTS.IsCancellationRequested;
 
         public IPEndPoint LocalEndPoint => this.localEndPoint;
-
-        public IObservable<Exception> OnError => this.errorSubject.AsObservable();
-
-        public SendStatistics SendStatistics
-        {
-            get
-            {
-                var sendStatistics = new SendStatistics
-                {
-                    DroppedPackets = this.droppedPackets,
-                    QueueLength = this.sendQueue.Count,
-                    SlowSends = this.slowSends,
-                    DestinationCount = this.usedDestinations.Count
-                };
-
-                // Reset
-                this.droppedPackets = 0;
-                this.slowSends = 0;
-                this.usedDestinations.Clear();
-
-                return sendStatistics;
-            }
-        }
 
         /// <summary>
         /// Observable that provides all parsed packets. This is buffered on its own thread so the processing can
         /// take any time necessary (memory consumption will go up though, there is no upper limit to amount of data buffered).
         /// </summary>
         public IObservable<ReceiveDataPacket> OnPacket => this.packetSubject.AsObservable();
-
-        public void StartReceive()
-        {
-            this.clock.Restart();
-        }
-
-        public double ReceiveClock => this.clock.Elapsed.TotalMilliseconds;
-
-        private async Task Receiver()
-        {
-            while (!this.shutdownCTS.IsCancellationRequested)
-            {
-                try
-                {
-                    var result = await this.socket.ReceiveMessageFromAsync(this.receiveBufferMem, SocketFlags.None, _blankEndpoint, this.shutdownCTS.Token);
-
-                    // Capture the timestamp first so it's as accurate as possible
-                    double timestampMS = this.clock.Elapsed.TotalMilliseconds;
-
-                    var destAddress = (result.RemoteEndPoint as IPEndPoint)?.Address;
-
-                    if (result.RemoteEndPoint.Equals(this.localEndPoint) && destAddress?.Equals(result.PacketInformation.Address) == false)
-                        // Filter out our own
-                        continue;
-
-                    if (result.ReceivedBytes > 0)
-                    {
-                        var readBuffer = this.receiveBufferMem[..result.ReceivedBytes];
-
-                        var packet = BasePacket.Parse(readBuffer);
-
-                        if (packet != null)
-                        {
-                            var newPacket = new ReceiveDataPacket
-                            {
-                                TimestampMS = timestampMS,
-                                Source = (IPEndPoint)result.RemoteEndPoint,
-                                Packet = packet
-                            };
-
-                            if (!this.endPointCache.TryGetValue(result.PacketInformation.Address, out var ipEndPoint))
-                            {
-                                ipEndPoint = new IPEndPoint(result.PacketInformation.Address, this.localEndPoint.Port);
-                                this.endPointCache.Add(result.PacketInformation.Address, ipEndPoint);
-                            }
-
-                            newPacket.Destination = ipEndPoint;
-
-                            this.packetSubject.OnNext(newPacket);
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    if (ex is not OperationCanceledException)
-                    {
-                        this.errorSubject.OnNext(ex);
-                    }
-
-                    if (ex is System.Net.Sockets.SocketException)
-                    {
-                        // Network unreachable
-                        this.shutdownCTS.Cancel();
-                        break;
-                    }
-                }
-            }
-        }
 
         private static IPAddress GetBroadcastAddress(IPAddress address, IPAddress subnetMask)
         {
@@ -232,120 +104,34 @@ namespace Haukcode.KiNet
             return new IPAddress(broadcastAddress);
         }
 
-        private async Task Sender()
-        {
-            try
-            {
-                while (!this.shutdownCTS.IsCancellationRequested)
-                {
-                    SendData sendData = null;
-
-                    try
-                    {
-                        sendData = this.sendQueue.Take(this.shutdownCTS.Token);
-
-                        if (sendData.AgeMS > 100)
-                        {
-                            // Old, discard
-                            this.droppedPackets++;
-                            //Console.WriteLine($"Age {sendData.Enqueued.Elapsed.TotalMilliseconds:N2}   queue length = {this.sendQueue.Count}   Dropped = {this.droppedPackets}");
-                            continue;
-                        }
-
-                        var destination = sendData.Destination ?? this.broadcastEndPoint;
-
-                        var watch = Stopwatch.StartNew();
-                        if (destination != null)
-                            await this.socket.SendToAsync(sendData.Data.Memory[..sendData.DataLength], SocketFlags.None, destination);
-                        watch.Stop();
-
-                        if (watch.ElapsedMilliseconds > 20)
-                            this.slowSends++;
-                    }
-                    catch (Exception ex)
-                    {
-                        if (ex is OperationCanceledException)
-                            continue;
-
-                        //Console.WriteLine($"Exception in Sender handler: {ex.Message}");
-                        this.errorSubject.OnNext(ex);
-
-                        if (ex is System.Net.Sockets.SocketException)
-                        {
-                            // Network unreachable
-                            this.shutdownCTS.Cancel();
-                            break;
-                        }
-                    }
-                    finally
-                    {
-                        // Return to pool
-                        sendData?.Data?.Dispose();
-                    }
-                }
-            }
-            catch (SocketException)
-            {
-                // Ignore, most likely because we're shutting down
-            }
-        }
-
-        /// <summary>
-        /// Broadcast send data
-        /// </summary>
-        /// <param name="universeId">The universe Id to broadcast to</param>
-        /// <param name="data">Up to 512 bytes of DMX data</param>
-        /// <param name="startCode">Start code (default 0)</param>
-        public void SendDmxBroadcast(ushort universeId, ReadOnlyMemory<byte> data, byte startCode = 0, int protocolVersion = 1)
-        {
-            BasePacket packet = protocolVersion switch
-            {
-                1 => new DmxOutPacket(data),
-                2 => new PortOutPacket((byte)universeId, data, startCode),
-                _ => throw new NotImplementedException(),
-            };
-
-            SendPacket(packet);
-        }
-
         /// <summary>
         /// Unicast send data
         /// </summary>
         /// <param name="address">The address to unicast to</param>
         /// <param name="universeId">The Universe ID</param>
-        /// <param name="data">Up to 512 bytes of DMX data</param>
+        /// <param name="dmxData">Up to 512 bytes of DMX data</param>
         /// <param name="startCode">Start code (default 0)</param>
-        public void SendDmxUnicast(IPAddress address, ushort universeId, ReadOnlyMemory<byte> data, byte startCode = 0, int protocolVersion = 1)
+        public Task SendDmxData(IPAddress? address, ushort universeId, ReadOnlyMemory<byte> dmxData, bool important = false, byte startCode = 0, int protocolVersion = 1)
         {
             BasePacket packet = protocolVersion switch
             {
-                1 => new DmxOutPacket(data),
-                2 => new PortOutPacket((byte)universeId, data, startCode),
+                1 => new DmxOutPacket(dmxData),
+                2 => new PortOutPacket((byte)universeId, dmxData, startCode),
                 _ => throw new NotImplementedException(),
             };
 
-            SendPacket(address, packet);
-        }
-
-        /// <summary>
-        /// Broadcast send sync
-        /// </summary>
-        public void SendSyncBroadcast()
-        {
-            var packet = new SyncPacket();
-
-            SendPacket(packet);
+            return QueuePacket(address, packet, important);
         }
 
         /// <summary>
         /// Unicast send sync
         /// </summary>
         /// <param name="destination">Destination</param>
-        public void SendSyncUnicast(IPAddress destination)
+        public Task SendSync(IPAddress? destination)
         {
             var packet = new SyncPacket();
 
-            SendPacket(destination, packet);
+            return QueuePacket(destination, packet, true);
         }
 
         /// <summary>
@@ -353,95 +139,84 @@ namespace Haukcode.KiNet
         /// </summary>
         /// <param name="destination">Destination</param>
         /// <param name="packet">Packet</param>
-        public void SendPacket(IPAddress destination, BasePacket packet)
-        {
-            if (!this.endPointCache.TryGetValue(destination, out var ipEndPoint))
-            {
-                ipEndPoint = new IPEndPoint(destination, this.localEndPoint.Port);
-                this.endPointCache.Add(destination, ipEndPoint);
-            }
-
-            var memory = this.memoryPool.Rent(packet.Length);
-
-            int packetLength = packet.WriteToBuffer(memory.Memory);
-
-            var newSendData = new SendData
-            {
-                Data = memory,
-                DataLength = packetLength,
-                Destination = ipEndPoint
-            };
-
-            this.usedDestinations.Add(destination);
-
-            if (IsOperational)
-            {
-                this.sendQueue.Add(newSendData);
-            }
-            else
-            {
-                // Clear queue
-                while (this.sendQueue.TryTake(out _)) ;
-            }
-        }
-
-        /// <summary>
-        /// Send packet
-        /// </summary>
-        /// <param name="universeId">Universe Id</param>
-        /// <param name="packet">Packet</param>
-        public void SendPacket(BasePacket packet)
+        private async Task QueuePacket(IPAddress? destination, BasePacket packet, bool important)
         {
             packet.Sequence = Interlocked.Increment(ref this.sequenceCounter);
 
-            var memory = this.memoryPool.Rent(packet.Length);
-
-            int packetLength = packet.WriteToBuffer(memory.Memory);
-
-            var newSendData = new SendData
+            await base.QueuePacket(packet.Length, important, (newSendData, memory) =>
             {
-                Data = memory,
-                DataLength = packetLength
-            };
+                if (destination != null)
+                {
+                    if (!this.endPointCache.TryGetValue(destination, out var ipEndPoint))
+                    {
+                        ipEndPoint = new IPEndPoint(destination, this.localEndPoint.Port);
+                        this.endPointCache.Add(destination, ipEndPoint);
+                    }
 
-            this.usedDestinations.Add(null);
-            if (IsOperational)
-            {
-                this.sendQueue.Add(newSendData);
-            }
-            else
-            {
-                // Clear queue
-                while (this.sendQueue.TryTake(out _)) ;
-            }
+                    newSendData.Destination = ipEndPoint;
+                }
+
+                return packet.WriteToBuffer(memory);
+            });
         }
 
         public void WarmUpSockets(IEnumerable<ushort> universeIds)
         {
         }
 
-        public void Dispose()
+        protected override void Dispose(bool disposing)
         {
-            this.shutdownCTS.Cancel();
+            base.Dispose(disposing);
 
-            try
+            if (disposing)
             {
-                this.socket.Shutdown(SocketShutdown.Both);
+                try
+                {
+                    this.socket.Shutdown(SocketShutdown.Both);
+                }
+                catch
+                {
+                }
+                this.socket.Close();
+                this.socket.Dispose();
             }
-            catch
+        }
+
+        protected override ValueTask<int> SendPacketAsync(SendData sendData, ReadOnlyMemory<byte> payload)
+        {
+            return this.socket.SendToAsync(payload, SocketFlags.None, sendData.Destination);
+        }
+
+        protected async override ValueTask<(int ReceivedBytes, SocketReceiveMessageFromResult Result)> ReceiveData(Memory<byte> memory, CancellationToken cancelToken)
+        {
+            var result = await this.socket.ReceiveMessageFromAsync(memory, SocketFlags.None, _blankEndpoint, cancelToken);
+
+            return (result.ReceivedBytes, result);
+        }
+
+        protected override void ParseReceiveData(ReadOnlyMemory<byte> memory, SocketReceiveMessageFromResult result, double timestampMS)
+        {
+            var packet = BasePacket.Parse(memory);
+
+            if (packet != null)
             {
+                var newPacket = new ReceiveDataPacket
+                {
+                    TimestampMS = timestampMS,
+                    Source = (IPEndPoint)result.RemoteEndPoint,
+                    Packet = packet
+                };
+
+                if (!this.endPointCache.TryGetValue(result.PacketInformation.Address, out var ipEndPoint))
+                {
+                    ipEndPoint = new IPEndPoint(result.PacketInformation.Address, this.localEndPoint.Port);
+                    this.endPointCache.Add(result.PacketInformation.Address, ipEndPoint);
+                }
+
+                newPacket.Destination = ipEndPoint ?? this.broadcastEndPoint;
+
+                this.packetSubject.OnNext(newPacket);
             }
-
-            if (this.receiveTask?.IsCanceled == false)
-                this.receiveTask?.Wait();
-            this.receiveTask?.Dispose();
-
-            if (this.sendTask?.IsCanceled == false)
-                this.sendTask?.Wait();
-            this.sendTask?.Dispose();
-
-            this.socket.Close();
-            this.socket.Dispose();
         }
     }
 }

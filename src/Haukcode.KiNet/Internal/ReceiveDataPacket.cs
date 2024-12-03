@@ -8,6 +8,6 @@ namespace Haukcode.KiNet
 {
     public class ReceiveDataPacket : ReceiveDataBase
     {
-        public BasePacket Packet { get; set; }
+        public BasePacket Packet { get; set; } = null!;
     }
 }
