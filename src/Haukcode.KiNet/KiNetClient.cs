@@ -36,7 +36,7 @@ namespace Haukcode.KiNet
         private readonly IPEndPoint localEndPoint;
 
         public KiNetClient(IPAddress localAddress, IPAddress localSubnetMask, IPAddress? bindAddress = null)
-            : base(() => new SendData(), ReceiveBufferSize)
+            : base(() => new SendData(), 1000)
         {
             this.packetSubject = new Subject<ReceiveDataPacket>();
 
