@@ -88,6 +88,8 @@ namespace Haukcode.KiNet
         /// </summary>
         public IObservable<ReceiveDataPacket> OnPacket => this.packetSubject.AsObservable();
 
+        protected override bool SupportsTwoReceivers => false;
+
         private static IPAddress GetBroadcastAddress(IPAddress address, IPAddress subnetMask)
         {
             byte[] ipAdressBytes = address.GetAddressBytes();
@@ -187,13 +189,6 @@ namespace Haukcode.KiNet
             return this.socket.SendToAsync(payload, SocketFlags.None, sendData.Destination);
         }
 
-        protected async override ValueTask<(int ReceivedBytes, SocketReceiveMessageFromResult Result)> ReceiveData(Memory<byte> memory, CancellationToken cancelToken)
-        {
-            var result = await this.socket.ReceiveMessageFromAsync(memory, SocketFlags.None, _blankEndpoint, cancelToken);
-
-            return (result.ReceivedBytes, result);
-        }
-
         protected override void ParseReceiveData(ReadOnlyMemory<byte> memory, SocketReceiveMessageFromResult result, double timestampMS)
         {
             var packet = BasePacket.Parse(memory);
@@ -217,6 +212,18 @@ namespace Haukcode.KiNet
 
                 this.packetSubject.OnNext(newPacket);
             }
+        }
+
+        protected override async ValueTask<(int ReceivedBytes, SocketReceiveMessageFromResult Result)> ReceiveData1(Memory<byte> memory, CancellationToken cancelToken)
+        {
+            var result = await this.socket.ReceiveMessageFromAsync(memory, SocketFlags.None, _blankEndpoint, cancelToken);
+
+            return (result.ReceivedBytes, result);
+        }
+
+        protected override ValueTask<(int ReceivedBytes, SocketReceiveMessageFromResult Result)> ReceiveData2(Memory<byte> memory, CancellationToken cancelToken)
+        {
+            throw new NotImplementedException();
         }
     }
 }
