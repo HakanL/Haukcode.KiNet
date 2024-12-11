@@ -184,7 +184,7 @@ namespace Haukcode.KiNet
 
         protected override ValueTask<int> SendPacketAsync(SendData sendData, ReadOnlyMemory<byte> payload)
         {
-            return this.socket.SendToAsync(payload, SocketFlags.None, sendData.Destination);
+            return this.socket.SendToAsync(payload, SocketFlags.None, sendData.Destination ?? this.broadcastEndPoint);
         }
 
         protected override async ValueTask<(int ReceivedBytes, SocketReceiveMessageFromResult Result)> ReceiveData(Memory<byte> memory, CancellationToken cancelToken)
