@@ -15,7 +15,7 @@ using Haukcode.KiNet.Model;
 
 namespace Haukcode.KiNet
 {
-    public class KiNetClient : Client<KiNetClient.SendData, SocketReceiveMessageFromResult>
+    public class KiNetClient : Client<KiNetClient.SendData, ReceiveDataPacket>
     {
         public const int DefaultPort = 6038;
 
@@ -87,8 +87,6 @@ namespace Haukcode.KiNet
         /// take any time necessary (memory consumption will go up though, there is no upper limit to amount of data buffered).
         /// </summary>
         public IObservable<ReceiveDataPacket> OnPacket => this.packetSubject.AsObservable();
-
-        protected override bool SupportsTwoReceivers => false;
 
         private static IPAddress GetBroadcastAddress(IPAddress address, IPAddress subnetMask)
         {
@@ -189,41 +187,47 @@ namespace Haukcode.KiNet
             return this.socket.SendToAsync(payload, SocketFlags.None, sendData.Destination);
         }
 
-        protected override void ParseReceiveData(ReadOnlyMemory<byte> memory, SocketReceiveMessageFromResult result, double timestampMS)
-        {
-            var packet = BasePacket.Parse(memory);
-
-            if (packet != null)
-            {
-                var newPacket = new ReceiveDataPacket
-                {
-                    TimestampMS = timestampMS,
-                    Source = (IPEndPoint)result.RemoteEndPoint,
-                    Packet = packet
-                };
-
-                if (!this.endPointCache.TryGetValue(result.PacketInformation.Address, out var ipEndPoint))
-                {
-                    ipEndPoint = new IPEndPoint(result.PacketInformation.Address, this.localEndPoint.Port);
-                    this.endPointCache.Add(result.PacketInformation.Address, ipEndPoint);
-                }
-
-                newPacket.Destination = ipEndPoint ?? this.broadcastEndPoint;
-
-                this.packetSubject.OnNext(newPacket);
-            }
-        }
-
-        protected override async ValueTask<(int ReceivedBytes, SocketReceiveMessageFromResult Result)> ReceiveData1(Memory<byte> memory, CancellationToken cancelToken)
+        protected override async ValueTask<(int ReceivedBytes, SocketReceiveMessageFromResult Result)> ReceiveData(Memory<byte> memory, CancellationToken cancelToken)
         {
             var result = await this.socket.ReceiveMessageFromAsync(memory, SocketFlags.None, _blankEndpoint, cancelToken);
 
             return (result.ReceivedBytes, result);
         }
 
-        protected override ValueTask<(int ReceivedBytes, SocketReceiveMessageFromResult Result)> ReceiveData2(Memory<byte> memory, CancellationToken cancelToken)
+        protected override ReceiveDataPacket? TryParseObject(ReadOnlyMemory<byte> buffer, double timestampMS, IPEndPoint sourceIP, IPAddress destinationIP)
         {
-            throw new NotImplementedException();
+            var packet = BasePacket.Parse(buffer);
+
+            // Note that we're still using the memory from the pipeline here, the packet is not allocating its own DMX data byte array
+            if (packet != null)
+            {
+                var parsedObject = new ReceiveDataPacket
+                {
+                    TimestampMS = timestampMS,
+                    Source = sourceIP,
+                    Packet = packet
+                };
+
+                if (!this.endPointCache.TryGetValue(destinationIP, out var ipEndPoint))
+                {
+                    ipEndPoint = new IPEndPoint(destinationIP, this.localEndPoint.Port);
+                    this.endPointCache.Add(destinationIP, ipEndPoint);
+                }
+
+                parsedObject.Destination = ipEndPoint ?? this.broadcastEndPoint;
+
+                return parsedObject;
+            }
+
+            return null;
+        }
+
+        protected override void InitializeReceiveSocket()
+        {
+        }
+
+        protected override void DisposeReceiveSocket()
+        {
         }
     }
 }
