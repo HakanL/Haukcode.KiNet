@@ -21,7 +21,12 @@ namespace Haukcode.KiNet
 
         public class SendData : HighPerfComm.SendData
         {
-            public IPEndPoint Destination { get; set; } = null!;
+            public IPEndPoint Destination { get; set; }
+
+            public SendData(IPEndPoint destination)
+            {
+                Destination = destination;
+            }
         }
 
         private const int ReceiveBufferSize = 20480;
@@ -36,7 +41,7 @@ namespace Haukcode.KiNet
         private readonly IPEndPoint localEndPoint;
 
         public KiNetClient(IPAddress localAddress, IPAddress localSubnetMask, IPAddress? bindAddress = null)
-            : base(() => new SendData(), 1000)
+            : base(1000)
         {
             this.packetSubject = new Subject<ReceiveDataPacket>();
 
@@ -44,37 +49,14 @@ namespace Haukcode.KiNet
             this.socket.ReceiveBufferSize = ReceiveBufferSize;
             this.socket.SendBufferSize = SendBufferSize;
 
-            // Set the SIO_UDP_CONNRESET ioctl to true for this UDP socket. If this UDP socket
-            //    ever sends a UDP packet to a remote destination that exists but there is
-            //    no socket to receive the packet, an ICMP port unreachable message is returned
-            //    to the sender. By default, when this is received the next operation on the
-            //    UDP socket that send the packet will receive a SocketException. The native
-            //    (Winsock) error that is received is WSAECONNRESET (10054). Since we don't want
-            //    to wrap each UDP socket operation in a try/except, we'll disable this error
-            //    for the socket with this ioctl call.
-            try
-            {
-                uint IOC_IN = 0x80000000;
-                uint IOC_VENDOR = 0x18000000;
-                uint SIO_UDP_CONNRESET = IOC_IN | IOC_VENDOR | 12;
+            Haukcode.Network.Utils.SetSocketOptions(this.socket);
 
-                byte[] optionInValue = { Convert.ToByte(false) };
-                byte[] optionOutValue = new byte[4];
-                this.socket.IOControl((int)SIO_UDP_CONNRESET, optionInValue, optionOutValue);
-            }
-            catch
-            {
-                Debug.WriteLine("Unable to set SIO_UDP_CONNRESET, maybe not supported.");
-            }
-
-            this.socket.ExclusiveAddressUse = false;
             this.socket.EnableBroadcast = true;
-            this.socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
 
             this.localEndPoint = new IPEndPoint(localAddress, DefaultPort);
-            this.broadcastEndPoint = new IPEndPoint(GetBroadcastAddress(localAddress, localSubnetMask), this.localEndPoint.Port);
+            this.broadcastEndPoint = new IPEndPoint(Haukcode.Network.Utils.GetBroadcastAddress(localAddress, localSubnetMask), this.localEndPoint.Port);
 
-            // Linux wants Any to get multicast/broadcast packets
+            // Linux wants Any to get multicast/broadcast packets (including unicast)
             this.socket.Bind(new IPEndPoint(bindAddress ?? localAddress, this.localEndPoint.Port));
 
             this.socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Broadcast, 1);
@@ -87,22 +69,6 @@ namespace Haukcode.KiNet
         /// take any time necessary (memory consumption will go up though, there is no upper limit to amount of data buffered).
         /// </summary>
         public IObservable<ReceiveDataPacket> OnPacket => this.packetSubject.AsObservable();
-
-        private static IPAddress GetBroadcastAddress(IPAddress address, IPAddress subnetMask)
-        {
-            byte[] ipAdressBytes = address.GetAddressBytes();
-            byte[] subnetMaskBytes = subnetMask.GetAddressBytes();
-
-            if (ipAdressBytes.Length != subnetMaskBytes.Length)
-                throw new ArgumentException("Lengths of IP address and subnet mask do not match.");
-
-            byte[] broadcastAddress = new byte[ipAdressBytes.Length];
-            for (int i = 0; i < broadcastAddress.Length; i++)
-            {
-                broadcastAddress[i] = (byte)(ipAdressBytes[i] | (subnetMaskBytes[i] ^ 255));
-            }
-            return new IPAddress(broadcastAddress);
-        }
 
         /// <summary>
         /// Unicast send data
@@ -143,8 +109,10 @@ namespace Haukcode.KiNet
         {
             packet.Sequence = Interlocked.Increment(ref this.sequenceCounter);
 
-            await base.QueuePacket(packet.Length, important, (newSendData, memory) =>
+            await base.QueuePacket(packet.Length, important, () =>
             {
+                IPEndPoint? sendDataDestination = null;
+
                 if (destination != null)
                 {
                     if (!this.endPointCache.TryGetValue(destination, out var ipEndPoint))
@@ -153,11 +121,15 @@ namespace Haukcode.KiNet
                         this.endPointCache.Add(destination, ipEndPoint);
                     }
 
-                    newSendData.Destination = ipEndPoint;
+                    // Only works for when subnet mask is /24 or less
+                    if (ipEndPoint.Address.GetAddressBytes().Last() == 255)
+                        sendDataDestination = null;
+                    else
+                        sendDataDestination = ipEndPoint;
                 }
 
-                return packet.WriteToBuffer(memory);
-            });
+                return new SendData(sendDataDestination ?? this.broadcastEndPoint);
+            }, packet.WriteToBuffer);
         }
 
         public void WarmUpSockets(IEnumerable<ushort> universeIds)
@@ -184,7 +156,7 @@ namespace Haukcode.KiNet
 
         protected override ValueTask<int> SendPacketAsync(SendData sendData, ReadOnlyMemory<byte> payload)
         {
-            return this.socket.SendToAsync(payload, SocketFlags.None, sendData.Destination ?? this.broadcastEndPoint);
+            return this.socket.SendToAsync(payload, SocketFlags.None, sendData.Destination);
         }
 
         protected override async ValueTask<(int ReceivedBytes, SocketReceiveMessageFromResult Result)> ReceiveData(Memory<byte> memory, CancellationToken cancelToken)
