@@ -8,6 +8,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Haukcode.HighPerfComm;
@@ -17,8 +18,6 @@ namespace Haukcode.KiNet
 {
     public class KiNetClient : Client<KiNetClient.SendData, ReceiveDataPacket>
     {
-        public const int DefaultPort = 6038;
-
         public class SendData : HighPerfComm.SendData
         {
             public IPEndPoint Destination { get; set; }
@@ -29,49 +28,41 @@ namespace Haukcode.KiNet
             }
         }
 
-        private const int ReceiveBufferSize = 20480;
+        public const int DefaultPort = 6038;
+        public const int ReceiveBufferSize = 20480;
         private const int SendBufferSize = 1400;
         private static readonly IPEndPoint _blankEndpoint = new(IPAddress.Any, 0);
 
-        private readonly Socket socket;
-        private readonly ISubject<ReceiveDataPacket> packetSubject;
-        private readonly Dictionary<IPAddress, IPEndPoint> endPointCache = [];
-        private IPEndPoint broadcastEndPoint;
-        private uint sequenceCounter;
+        private Socket? listenSocket;
+        private readonly Socket sendSocket;
         private readonly IPEndPoint localEndPoint;
+        private readonly IPEndPoint broadcastEndPoint;
+        private readonly Dictionary<IPAddress, IPEndPoint> endPointCache = [];
+        private uint sequenceCounter;
 
-        public KiNetClient(IPAddress localAddress, IPAddress localSubnetMask, IPAddress? bindAddress = null)
-            : base(1000)
+        public KiNetClient(IPAddress localAddress, IPAddress localSubnetMask, int port = DefaultPort)
+            : base(BasePacket.MAX_PACKET_SIZE)
         {
-            this.packetSubject = new Subject<ReceiveDataPacket>();
+            this.localEndPoint = new IPEndPoint(localAddress, port);
+            this.broadcastEndPoint = new IPEndPoint(Haukcode.Network.Utils.GetBroadcastAddress(localAddress, localSubnetMask), port);
 
-            this.socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-            this.socket.ReceiveBufferSize = ReceiveBufferSize;
-            this.socket.SendBufferSize = SendBufferSize;
+            this.sendSocket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            this.sendSocket.SendBufferSize = SendBufferSize;
 
-            Haukcode.Network.Utils.SetSocketOptions(this.socket);
+            Haukcode.Network.Utils.SetSocketOptions(this.sendSocket);
 
-            this.socket.EnableBroadcast = true;
+            this.sendSocket.DontFragment = true;
+            this.sendSocket.EnableBroadcast = true;
 
-            this.localEndPoint = new IPEndPoint(localAddress, DefaultPort);
-            this.broadcastEndPoint = new IPEndPoint(Haukcode.Network.Utils.GetBroadcastAddress(localAddress, localSubnetMask), this.localEndPoint.Port);
-
-            // Linux wants Any to get multicast/broadcast packets (including unicast)
-            this.socket.Bind(new IPEndPoint(bindAddress ?? localAddress, this.localEndPoint.Port));
-
-            this.socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Broadcast, 1);
+            this.sendSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Broadcast, 1);
         }
 
         public IPEndPoint LocalEndPoint => this.localEndPoint;
 
-        /// <summary>
-        /// Observable that provides all parsed packets. This is buffered on its own thread so the processing can
-        /// take any time necessary (memory consumption will go up though, there is no upper limit to amount of data buffered).
-        /// </summary>
-        public IObservable<ReceiveDataPacket> OnPacket => this.packetSubject.AsObservable();
+        public IPAddress BroadcastAddress => this.broadcastEndPoint.Address;
 
         /// <summary>
-        /// Unicast send data
+        /// Send data
         /// </summary>
         /// <param name="address">The address to unicast to</param>
         /// <param name="universeId">The Universe ID</param>
@@ -90,7 +81,7 @@ namespace Haukcode.KiNet
         }
 
         /// <summary>
-        /// Unicast send sync
+        /// Send sync
         /// </summary>
         /// <param name="destination">Destination</param>
         public Task SendSync(IPAddress? destination)
@@ -132,10 +123,6 @@ namespace Haukcode.KiNet
             }, packet.WriteToBuffer);
         }
 
-        public void WarmUpSockets(IEnumerable<ushort> universeIds)
-        {
-        }
-
         protected override void Dispose(bool disposing)
         {
             base.Dispose(disposing);
@@ -144,24 +131,24 @@ namespace Haukcode.KiNet
             {
                 try
                 {
-                    this.socket.Shutdown(SocketShutdown.Both);
+                    this.sendSocket.Shutdown(SocketShutdown.Both);
                 }
                 catch
                 {
                 }
-                this.socket.Close();
-                this.socket.Dispose();
+                this.sendSocket.Close();
+                this.sendSocket.Dispose();
             }
         }
 
         protected override ValueTask<int> SendPacketAsync(SendData sendData, ReadOnlyMemory<byte> payload)
         {
-            return this.socket.SendToAsync(payload, SocketFlags.None, sendData.Destination);
+            return this.sendSocket.SendToAsync(payload, SocketFlags.None, sendData.Destination);
         }
 
         protected override async ValueTask<(int ReceivedBytes, SocketReceiveMessageFromResult Result)> ReceiveData(Memory<byte> memory, CancellationToken cancelToken)
         {
-            var result = await this.socket.ReceiveMessageFromAsync(memory, SocketFlags.None, _blankEndpoint, cancelToken);
+            var result = await this.listenSocket!.ReceiveMessageFromAsync(memory, SocketFlags.None, _blankEndpoint, cancelToken);
 
             return (result.ReceivedBytes, result);
         }
@@ -194,12 +181,42 @@ namespace Haukcode.KiNet
             return null;
         }
 
+        public int? ActualReceiveBufferSize
+        {
+            get
+            {
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+                    // Linux reports the internal buffer size, which is double the requested size
+                    return this.listenSocket?.ReceiveBufferSize / 2;
+                else
+                    return this.listenSocket?.ReceiveBufferSize;
+            }
+        }
+
         protected override void InitializeReceiveSocket()
         {
+            this.listenSocket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            this.listenSocket.ReceiveBufferSize = ReceiveBufferSize;
+
+            Haukcode.Network.Utils.SetSocketOptions(this.listenSocket);
+
+            // Linux wants IPAddress.Any to get all types of packets (unicast/multicast/broadcast)
+            this.listenSocket.Bind(new IPEndPoint(IPAddress.Any, this.localEndPoint.Port));
         }
 
         protected override void DisposeReceiveSocket()
         {
+            try
+            {
+                this.listenSocket?.Shutdown(SocketShutdown.Both);
+            }
+            catch
+            {
+            }
+
+            this.listenSocket?.Close();
+            this.listenSocket?.Dispose();
+            this.listenSocket = null;
         }
     }
 }

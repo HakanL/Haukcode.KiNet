@@ -2,6 +2,8 @@
 
 public abstract class BasePacket
 {
+    public const int MAX_PACKET_SIZE = 638;
+
     public const uint Magic = 0x4adc0104;
 
     public abstract ushort Version { get; }
