@@ -44,7 +44,7 @@ public class DiscoverSuppliesResponse : BasePacket
 
         writer.WriteUInt16(Something);
 
-        writer.WriteBytes(new byte[8]);
+        writer.WriteZeros(8);
     }
 
     public DiscoverSuppliesResponse(System.Net.IPAddress sourceIP)
