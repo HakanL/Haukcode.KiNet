@@ -19,12 +19,11 @@ namespace Haukcode.KiNet.ConsoleExample
 
         static void Listen()
         {
-            var firstAddr = Haukcode.Network.Helper.GetFirstBindAddress();
+            var firstAddr = Haukcode.Network.Utils.GetFirstBindAddress();
 
             client = new KiNetClient(
                 localAddress: firstAddr.IPAddress,
-                localSubnetMask: firstAddr.NetMask,
-                bindAddress: IPAddress.Any);
+                localSubnetMask: firstAddr.NetMask);
 
             client.OnError.Subscribe(e =>
             {
@@ -34,6 +33,7 @@ namespace Haukcode.KiNet.ConsoleExample
             //var test = new DiscoverMadrix(client);
             var test = new EmulateV2(client);
 
+            //FIXME - these examples are broken
             client.StartReceive();
 
             test.Execute();
