@@ -15,7 +15,7 @@ public class PortOutPacket : BasePacket
 
     private const ushort MinDMXDataLength = 24;
 
-    public uint Universe { get; set; } = 0xffffffff;
+    public uint UniverseId { get; set; } = 0xffffffff;
 
     public byte Port { get; set; } = 0;
 
@@ -32,7 +32,7 @@ public class PortOutPacket : BasePacket
     internal override void WritePacket(LittleEndianBinaryWriter writer)
     {
         writer.WriteUInt32(Sequence);
-        writer.WriteUInt32(Universe);
+        writer.WriteUInt32(UniverseId);
         writer.WriteByte(Port);
         writer.WriteByte(Padding1);
         writer.WriteUInt16(PortOutFlags);
@@ -59,7 +59,7 @@ public class PortOutPacket : BasePacket
     public PortOutPacket(LittleEndianBinaryReader reader)
     {
         Sequence = reader.ReadUInt32();
-        Universe = reader.ReadUInt32();
+        UniverseId = reader.ReadUInt32();
         Port = reader.ReadByte();
         Padding1 = reader.ReadByte();
         PortOutFlags = reader.ReadUInt16();

@@ -21,7 +21,7 @@ public class DmxOutPacket : BasePacket
 
     public ushort Timer { get; set; } = 0;
 
-    public uint Universe { get; set; } = 0xffffffff;
+    public uint UniverseId { get; set; } = 0xffffffff;
 
     public byte StartCode { get; set; } = 0;
 
@@ -33,7 +33,7 @@ public class DmxOutPacket : BasePacket
         writer.WriteByte(Port);
         writer.WriteByte(Flags);
         writer.WriteUInt16(Timer);
-        writer.WriteUInt32(Universe);
+        writer.WriteUInt32(UniverseId);
         writer.WriteByte(StartCode);
 
         writer.WriteBytes(DMXData);
@@ -54,7 +54,7 @@ public class DmxOutPacket : BasePacket
         Port = reader.ReadByte();
         Flags = reader.ReadByte();
         Timer = reader.ReadUInt16();
-        Universe = reader.ReadUInt32();
+        UniverseId = reader.ReadUInt32();
         StartCode = reader.ReadByte();
 
         DMXData = reader.ReadBytes();

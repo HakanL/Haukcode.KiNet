@@ -54,6 +54,9 @@ namespace Haukcode.KiNet
             this.sendSocket.DontFragment = true;
             this.sendSocket.EnableBroadcast = true;
 
+            // Bind to the local interface
+            this.sendSocket.Bind(new IPEndPoint(localAddress, 0));
+
             this.sendSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Broadcast, 1);
         }
 
@@ -68,12 +71,12 @@ namespace Haukcode.KiNet
         /// <param name="universeId">The Universe ID</param>
         /// <param name="dmxData">Up to 512 bytes of DMX data</param>
         /// <param name="startCode">Start code (default 0)</param>
-        public Task SendDmxData(IPAddress? address, ushort universeId, ReadOnlyMemory<byte> dmxData, bool important = false, byte startCode = 0, int protocolVersion = 1)
+        public Task SendDmxData(IPAddress? address, byte universeId, ReadOnlyMemory<byte> dmxData, bool important = false, byte startCode = 0, int protocolVersion = 1)
         {
             BasePacket packet = protocolVersion switch
             {
                 1 => new DmxOutPacket(dmxData),
-                2 => new PortOutPacket((byte)universeId, dmxData, startCode),
+                2 => new PortOutPacket(universeId, dmxData, startCode),
                 _ => throw new NotImplementedException(),
             };
 
