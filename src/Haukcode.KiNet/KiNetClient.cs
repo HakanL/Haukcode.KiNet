@@ -41,7 +41,7 @@ namespace Haukcode.KiNet
         private uint sequenceCounter;
 
         public KiNetClient(IPAddress localAddress, IPAddress localSubnetMask, int port = DefaultPort)
-            : base(BasePacket.MAX_PACKET_SIZE)
+            : base(BasePacket.MAX_PACKET_SIZE, null, null)
         {
             this.localEndPoint = new IPEndPoint(localAddress, port);
             this.broadcastEndPoint = new IPEndPoint(Haukcode.Network.Utils.GetBroadcastAddress(localAddress, localSubnetMask), port);
