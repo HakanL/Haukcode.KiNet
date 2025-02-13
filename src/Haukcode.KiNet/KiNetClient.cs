@@ -73,12 +73,25 @@ namespace Haukcode.KiNet
         /// <param name="startCode">Start code (default 0)</param>
         public Task SendDmxData(IPAddress? address, byte universeId, ReadOnlyMemory<byte> dmxData, bool important = false, byte startCode = 0, int protocolVersion = 1)
         {
-            BasePacket packet = protocolVersion switch
+            BasePacket packet;
+            switch (protocolVersion)
             {
-                1 => new DmxOutPacket(dmxData),
-                2 => new PortOutPacket(universeId, dmxData, startCode),
-                _ => throw new NotImplementedException(),
-            };
+                case 1:
+                    packet = new DmxOutPacket(dmxData);
+                    break;
+
+                case 2:
+                    packet = new PortOutPacket(universeId, dmxData, startCode);
+                    break;
+
+#if DEBUG
+                default:
+                    throw new NotImplementedException();
+#else
+                default:
+                    return Task.CompletedTask;
+#endif
+            }
 
             return QueuePacket(packet, address, important: important);
         }
