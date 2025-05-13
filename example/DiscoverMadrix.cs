@@ -17,11 +17,12 @@ internal class DiscoverMadrix
         this.client = client;
 
         double last = 0;
-        client.OnPacket.Subscribe(d =>
-        {
-            Listener_OnPacket(d.TimestampMS, d.TimestampMS - last, d.Packet);
-            last = d.TimestampMS;
-        });
+        //TODO
+        //client.OnPacket.Subscribe(d =>
+        //{
+        //    Listener_OnPacket(d.TimestampMS, d.TimestampMS - last, d.Packet);
+        //    last = d.TimestampMS;
+        //});
     }
 
     public async Task Execute()

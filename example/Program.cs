@@ -34,7 +34,7 @@ namespace Haukcode.KiNet.ConsoleExample
             var test = new EmulateV2(client);
 
             //FIXME - these examples are broken
-            client.StartReceive();
+            //client.StartReceive();
 
             test.Execute();
             /*            while (true)

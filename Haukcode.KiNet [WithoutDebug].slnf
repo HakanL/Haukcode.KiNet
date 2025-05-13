@@ -1,0 +1,9 @@
+{
+  "solution": {
+    "path": "Haukcode.KiNet.sln",
+    "projects": [
+      "example\\Haukcode.KiNet.ConsoleExample.csproj",
+      "src\\Haukcode.KiNet\\Haukcode.KiNet.csproj"
+    ]
+  }
+}
