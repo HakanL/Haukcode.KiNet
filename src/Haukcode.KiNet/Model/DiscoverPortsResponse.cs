@@ -54,7 +54,7 @@ public class DiscoverPortsResponse : BasePacket
 
     public int PortCount => Ports.Count;
 
-    public IList<PortData> Ports { get; set; }
+    public IList<PortData> Ports { get; set; } = [];
 
     internal override void WritePacket(LittleEndianBinaryWriter writer)
     {

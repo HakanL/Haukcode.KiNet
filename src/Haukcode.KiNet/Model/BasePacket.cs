@@ -29,7 +29,7 @@ public abstract class BasePacket
         return writer.BytesWritten;
     }
 
-    public static BasePacket Parse(ReadOnlyMemory<byte> inputBuffer)
+    public static BasePacket? Parse(ReadOnlyMemory<byte> inputBuffer)
     {
         var reader = new LittleEndianBinaryReader(inputBuffer);
 

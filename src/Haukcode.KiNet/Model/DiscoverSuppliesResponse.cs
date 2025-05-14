@@ -11,18 +11,18 @@ public class DiscoverSuppliesResponse : BasePacket
 
     protected override int PacketPayloadLength => 24 + Details.Length + 1 + Model.Length + 1 + 2 + 8;
 
-    public string Details { get; set; }
+    public string Details { get; set; } = string.Empty;
 
-    public string Model { get; set; }
+    public string Model { get; set; } = string.Empty;
 
     // IPv4
     public System.Net.IPAddress SourceIP { get; private set; }
 
     // 6 bytes
-    public byte[] MacAddress { get; set; }
+    public byte[] MacAddress { get; set; } = new byte[6];
 
     // 8 bytes
-    public byte[] Serial { get; set; }
+    public byte[] Serial { get; set; } = new byte[8];
 
     public ushort ProtocolVersion { get; set; }
 
