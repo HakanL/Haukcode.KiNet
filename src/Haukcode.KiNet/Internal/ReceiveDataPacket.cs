@@ -4,10 +4,15 @@ using System.Net;
 using System.Text;
 using Haukcode.KiNet.Model;
 
-namespace Haukcode.KiNet
+namespace Haukcode.KiNet;
+
+public class ReceiveDataPacket
 {
-    public class ReceiveDataPacket : ReceiveDataBase
-    {
-        public BasePacket Packet { get; set; } = null!;
-    }
+    public double TimestampMS { get; set; }
+
+    public IPEndPoint Source { get; set; } = null!;
+
+    public IPEndPoint Destination { get; set; } = null!;
+
+    public BasePacket Packet { get; set; } = null!;
 }
