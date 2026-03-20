@@ -139,6 +139,44 @@ public class KiNetClient : Client<KiNetClient.SendData, ReceiveDataPacket>
         }, packet.WriteToBuffer);
     }
 
+    /// <summary>
+    /// Send packet immediately, bypassing the send queue
+    /// </summary>
+    /// <param name="destination">Destination</param>
+    /// <param name="packet">Packet</param>
+    /// <param name="important">Important</param>
+    public Task SendPacketImmediately(IPAddress? destination, BasePacket packet, bool important = false)
+    {
+        IPEndPoint? sendDataDestination = null;
+
+        if (destination != null)
+        {
+            if (!this.endPointCache.TryGetValue(destination, out var ipEndPoint))
+            {
+                ipEndPoint = new IPEndPoint(destination, this.localEndPoint.Port);
+                this.endPointCache.Add(destination, ipEndPoint);
+            }
+
+            // Only works for when subnet mask is /24 or less
+            if (ipEndPoint.Address.GetAddressBytes().Last() == 255)
+                sendDataDestination = null;
+            else
+                sendDataDestination = ipEndPoint;
+        }
+
+        return SendPacketImmediately(sendDataDestination ?? this.broadcastEndPoint, packet, important);
+    }
+
+    public async Task SendPacketImmediately(IPEndPoint destination, BasePacket packet, bool important = false)
+    {
+        await SendImmediateAsync(
+            allocatePacketLength: packet.Length,
+            important: important,
+            sendDataFactory: () => new SendData(destination),
+            packetWriter: packet.WriteToBuffer);
+
+    }
+
     protected override void Dispose(bool disposing)
     {
         base.Dispose(disposing);
