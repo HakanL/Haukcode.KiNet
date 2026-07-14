@@ -135,7 +135,19 @@ public class KiNetClient : Client<KiNetClient.SendData, ReceiveDataPacket>
                     sendDataDestination = ipEndPoint;
             }
 
-            return new SendData(sendDataDestination ?? this.broadcastEndPoint);
+            var destinationEndPoint = sendDataDestination ?? this.broadcastEndPoint;
+
+            // Reuse a spent send-data object returned by the sender instead of allocating a new
+            // one for every queued packet. Every field is rewritten before use.
+            var pooledSendData = RentSendData();
+            if (pooledSendData != null)
+            {
+                pooledSendData.Destination = destinationEndPoint;
+
+                return pooledSendData;
+            }
+
+            return new SendData(destinationEndPoint);
         }, packet.WriteToBuffer);
     }
 
