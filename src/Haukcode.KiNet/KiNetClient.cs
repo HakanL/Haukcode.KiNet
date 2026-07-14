@@ -207,9 +207,14 @@ public class KiNetClient : Client<KiNetClient.SendData, ReceiveDataPacket>
         }
     }
 
-    // Single sender shard (the base class default), so senderIndex is always 0. KiNet is
-    // unicast/broadcast rather than a multicast group per universe, so it has none of the
-    // per-universe fan-out that makes sharding pay off for sACN.
+    // Single sender shard (the base class default), so senderIndex is always 0.
+    //
+    // KiNet deliberately does NOT shard, unlike sACN and Art-Net. Not because it is
+    // unicast/broadcast — the send cost is per packet regardless of destination — but because its
+    // sequence number is a single global counter (sequenceCounter below), not per universe.
+    // Sharding would hand consecutively-numbered packets to different threads and put them on the
+    // wire out of order. sACN and Art-Net both number sequences per universe, so sharding by
+    // universe keeps each stream's numbering monotonic; KiNet has no such key to shard on.
     protected override int SendPacket(SendData sendData, ReadOnlyMemory<byte> payload, int senderIndex)
     {
         if (!MemoryMarshal.TryGetArray(payload, out var segment))
