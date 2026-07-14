@@ -22,9 +22,17 @@ public class KiNetClient : Client<KiNetClient.SendData, ReceiveDataPacket>
     {
         public IPEndPoint Destination { get; set; }
 
+        /// <summary>
+        /// The destination pre-serialized once. Socket.SendTo(..., EndPoint) re-serializes the
+        /// EndPoint into a fresh SocketAddress on every call; handing it an already-serialized one
+        /// removes that work and the last per-packet allocations.
+        /// </summary>
+        public SocketAddress DestinationAddress { get; set; }
+
         public SendData(IPEndPoint destination)
         {
             Destination = destination;
+            DestinationAddress = destination.Serialize();
         }
     }
 
@@ -34,30 +42,70 @@ public class KiNetClient : Client<KiNetClient.SendData, ReceiveDataPacket>
     private static readonly IPEndPoint _blankEndpoint = new(IPAddress.Any, 0);
 
     private Socket? listenSocket;
-    private readonly Socket sendSocket;
+
+    // One send socket per sender shard. Several threads sharing one UDP socket serialize on the
+    // kernel's socket lock, which gives back most of the gain from sharding.
+    private readonly Socket[] sendSockets;
+
     private readonly IPEndPoint localEndPoint;
     private readonly IPEndPoint broadcastEndPoint;
     private readonly Dictionary<IPAddress, IPEndPoint> endPointCache = [];
+
+    // Serialized destinations, so the hot path never re-serializes an IPEndPoint. Only touched from
+    // the single queue-writer thread (the send-data factory).
+    private readonly Dictionary<IPEndPoint, SocketAddress> socketAddressCache = [];
+
+    // KiNet's header "sequence" is a nominal field: the reverse-engineered protocol documents it as
+    // "always set to 0, seq #, most of the time it's 0, not implemented in most supplies", real
+    // Color Kinetics supplies ignore it, and captured packets carry zeros. It is filled here (as
+    // OLA also does) but nothing reads it — so it imposes no ordering requirement on the wire and
+    // is not a reason to keep the send path single-threaded.
     private uint sequenceCounter;
 
-    public KiNetClient(IPAddress localAddress, IPAddress localSubnetMask, int port = DefaultPort)
-        : base(BasePacket.MAX_PACKET_SIZE, null, null)
+    /// <param name="senderCount">
+    /// Number of sender threads/sockets, sharded by universe id. KiNet pays the same per-packet
+    /// kernel send cost as every other protocol, and one sender thread saturates a core at roughly
+    /// 24,000 packets/sec. Default 1 = the original behavior.
+    /// </param>
+    public KiNetClient(IPAddress localAddress, IPAddress localSubnetMask, int port = DefaultPort, int senderCount = 1)
+        : base(BasePacket.MAX_PACKET_SIZE, null, null, senderCount)
     {
         this.localEndPoint = new IPEndPoint(localAddress, port);
         this.broadcastEndPoint = new IPEndPoint(Haukcode.Network.Utils.GetBroadcastAddress(localAddress, localSubnetMask), port);
 
-        this.sendSocket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-        this.sendSocket.SendBufferSize = SendBufferSize;
+        this.sendSockets = new Socket[SenderCount];
+        for (int i = 0; i < SenderCount; i++)
+        {
+            var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            socket.SendBufferSize = SendBufferSize;
 
-        Haukcode.Network.Utils.SetSocketOptions(this.sendSocket);
+            Haukcode.Network.Utils.SetSocketOptions(socket);
 
-        this.sendSocket.DontFragment = true;
-        this.sendSocket.EnableBroadcast = true;
+            socket.DontFragment = true;
+            socket.EnableBroadcast = true;
 
-        // Bind to the local interface
-        this.sendSocket.Bind(new IPEndPoint(localAddress, 0));
+            // Bind to the local interface (ephemeral port)
+            socket.Bind(new IPEndPoint(localAddress, 0));
 
-        this.sendSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Broadcast, 1);
+            socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Broadcast, 1);
+
+            this.sendSockets[i] = socket;
+        }
+    }
+
+    /// <summary>
+    /// Serialized form of a destination, cached. Called from the send-data factory on the single
+    /// queue-writer thread.
+    /// </summary>
+    private SocketAddress GetSocketAddress(IPEndPoint endPoint)
+    {
+        if (!this.socketAddressCache.TryGetValue(endPoint, out var socketAddress))
+        {
+            socketAddress = endPoint.Serialize();
+            this.socketAddressCache.Add(endPoint, socketAddress);
+        }
+
+        return socketAddress;
     }
 
     public IPEndPoint LocalEndPoint => this.localEndPoint;
@@ -93,7 +141,7 @@ public class KiNetClient : Client<KiNetClient.SendData, ReceiveDataPacket>
 #endif
         }
 
-        return QueuePacket(packet, address, important: important);
+        return QueuePacket(packet, address, important: important, shardKey: universeId);
     }
 
     /// <summary>
@@ -112,7 +160,7 @@ public class KiNetClient : Client<KiNetClient.SendData, ReceiveDataPacket>
     /// </summary>
     /// <param name="destination">Destination</param>
     /// <param name="packet">Packet</param>
-    public async Task QueuePacket(BasePacket packet, IPAddress? destination = null, bool important = false)
+    public async Task QueuePacket(BasePacket packet, IPAddress? destination = null, bool important = false, int shardKey = 0)
     {
         packet.Sequence = Interlocked.Increment(ref this.sequenceCounter);
 
@@ -143,12 +191,19 @@ public class KiNetClient : Client<KiNetClient.SendData, ReceiveDataPacket>
             if (pooledSendData != null)
             {
                 pooledSendData.Destination = destinationEndPoint;
+                pooledSendData.DestinationAddress = GetSocketAddress(destinationEndPoint);
 
                 return pooledSendData;
             }
 
+            // Pool empty (startup only) — the constructor serializes the destination itself.
             return new SendData(destinationEndPoint);
-        }, packet.WriteToBuffer);
+        },
+        packet.WriteToBuffer,
+        // Shard by universe: every packet for a universe goes out on the same thread and socket, so
+        // that universe's frames stay in order. The header sequence is ignored by receivers, so it
+        // imposes no cross-universe ordering constraint.
+        shardKey);
     }
 
     /// <summary>
@@ -195,32 +250,27 @@ public class KiNetClient : Client<KiNetClient.SendData, ReceiveDataPacket>
 
         if (disposing)
         {
-            try
+            foreach (var socket in this.sendSockets)
             {
-                this.sendSocket.Shutdown(SocketShutdown.Both);
+                try
+                {
+                    socket.Shutdown(SocketShutdown.Both);
+                }
+                catch
+                {
+                }
+
+                socket.Close();
+                socket.Dispose();
             }
-            catch
-            {
-            }
-            this.sendSocket.Close();
-            this.sendSocket.Dispose();
         }
     }
 
-    // Single sender shard (the base class default), so senderIndex is always 0.
-    //
-    // KiNet deliberately does NOT shard, unlike sACN and Art-Net. Not because it is
-    // unicast/broadcast — the send cost is per packet regardless of destination — but because its
-    // sequence number is a single global counter (sequenceCounter below), not per universe.
-    // Sharding would hand consecutively-numbered packets to different threads and put them on the
-    // wire out of order. sACN and Art-Net both number sequences per universe, so sharding by
-    // universe keeps each stream's numbering monotonic; KiNet has no such key to shard on.
     protected override int SendPacket(SendData sendData, ReadOnlyMemory<byte> payload, int senderIndex)
     {
-        if (!MemoryMarshal.TryGetArray(payload, out var segment))
-            throw new InvalidOperationException("Expected an array-backed send buffer");
-
-        return this.sendSocket.SendTo(segment.Array!, segment.Offset, segment.Count, SocketFlags.None, sendData.Destination);
+        // SendTo(..., SocketAddress) with a pre-serialized destination: the EndPoint overload
+        // re-serializes into a fresh SocketAddress on every call.
+        return this.sendSockets[senderIndex].SendTo(payload.Span, SocketFlags.None, sendData.DestinationAddress);
     }
 
     protected override int ReceiveData(Memory<byte> memory, out IPEndPoint? remoteEndPoint, out IPAddress? destinationAddress)
