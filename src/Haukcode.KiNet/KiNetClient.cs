@@ -62,6 +62,21 @@ public class KiNetClient : Client<KiNetClient.SendData, ReceiveDataPacket>
     // is not a reason to keep the send path single-threaded.
     private uint sequenceCounter;
 
+    // Reused across SendDmxData calls instead of allocating a packet per send (one per protocol
+    // version). Reconfigured in place and serialized synchronously inside QueuePacket before the
+    // next call, so a single instance is safe on the single-threaded send path.
+    private readonly DmxOutPacket scratchDmxOutPacket = new(ReadOnlyMemory<byte>.Empty);
+    private readonly PortOutPacket scratchPortOutPacket = new(0, ReadOnlyMemory<byte>.Empty);
+    private readonly Func<Memory<byte>, int> scratchDmxOutWriter;
+    private readonly Func<Memory<byte>, int> scratchPortOutWriter;
+
+    // Argument for the cached send-data factory. QueuePacket invokes the factory synchronously
+    // before its first await on the single queue-writer thread (the same assumption the
+    // non-locked caches here already rest on), so passing the destination through a field lets
+    // one cached delegate replace a fresh closure per queued packet.
+    private IPAddress? pendingDestination;
+    private readonly Func<SendData> pendingSendDataFactory;
+
     /// <param name="senderCount">
     /// Number of sender threads/sockets, sharded by universe id. KiNet pays the same per-packet
     /// kernel send cost as every other protocol, and one sender thread saturates a core at roughly
@@ -70,6 +85,10 @@ public class KiNetClient : Client<KiNetClient.SendData, ReceiveDataPacket>
     public KiNetClient(IPAddress localAddress, IPAddress localSubnetMask, int port = DefaultPort, int senderCount = 1)
         : base(BasePacket.MAX_PACKET_SIZE, null, null, senderCount)
     {
+        this.scratchDmxOutWriter = this.scratchDmxOutPacket.WriteToBuffer;
+        this.scratchPortOutWriter = this.scratchPortOutPacket.WriteToBuffer;
+        this.pendingSendDataFactory = BuildPendingSendData;
+
         this.localEndPoint = new IPEndPoint(localAddress, port);
         this.broadcastEndPoint = new IPEndPoint(Haukcode.Network.Utils.GetBroadcastAddress(localAddress, localSubnetMask), port);
 
@@ -121,15 +140,22 @@ public class KiNetClient : Client<KiNetClient.SendData, ReceiveDataPacket>
     /// <param name="startCode">Start code (default 0)</param>
     public Task SendDmxData(IPAddress? address, byte universeId, ReadOnlyMemory<byte> dmxData, bool important = false, byte startCode = 0, int protocolVersion = 1)
     {
+        // Reconfigure the reused scratch packets in place instead of allocating per send. The
+        // DMX memory is referenced, not copied — QueuePacket serializes it synchronously.
         BasePacket packet;
         switch (protocolVersion)
         {
             case 1:
-                packet = new DmxOutPacket(dmxData);
+                this.scratchDmxOutPacket.DMXData = dmxData;
+                packet = this.scratchDmxOutPacket;
                 break;
 
             case 2:
-                packet = new PortOutPacket(universeId, dmxData, startCode);
+                this.scratchPortOutPacket.Port = universeId;
+                this.scratchPortOutPacket.DMXData = dmxData;
+                this.scratchPortOutPacket.DataLength = (ushort)dmxData.Length;
+                this.scratchPortOutPacket.StartCode = startCode;
+                packet = this.scratchPortOutPacket;
                 break;
 
 #if DEBUG
@@ -164,46 +190,58 @@ public class KiNetClient : Client<KiNetClient.SendData, ReceiveDataPacket>
     {
         packet.Sequence = Interlocked.Increment(ref this.sequenceCounter);
 
-        await base.QueuePacket(packet.Length, important, () =>
+        this.pendingDestination = destination;
+
+        // The scratch packets get cached writer delegates; anything else (rare) pays the
+        // method-group allocation.
+        Func<Memory<byte>, int> packetWriter =
+            ReferenceEquals(packet, this.scratchDmxOutPacket) ? this.scratchDmxOutWriter :
+            ReferenceEquals(packet, this.scratchPortOutPacket) ? this.scratchPortOutWriter :
+            packet.WriteToBuffer;
+
+        await base.QueuePacket(packet.Length, important, this.pendingSendDataFactory, packetWriter,
+            // Shard by universe: every packet for a universe goes out on the same thread and socket, so
+            // that universe's frames stay in order. The header sequence is ignored by receivers, so it
+            // imposes no cross-universe ordering constraint.
+            shardKey);
+    }
+
+    private SendData BuildPendingSendData()
+    {
+        var destination = this.pendingDestination;
+
+        IPEndPoint? sendDataDestination = null;
+
+        if (destination != null)
         {
-            IPEndPoint? sendDataDestination = null;
-
-            if (destination != null)
+            if (!this.endPointCache.TryGetValue(destination, out var ipEndPoint))
             {
-                if (!this.endPointCache.TryGetValue(destination, out var ipEndPoint))
-                {
-                    ipEndPoint = new IPEndPoint(destination, this.localEndPoint.Port);
-                    this.endPointCache.Add(destination, ipEndPoint);
-                }
-
-                // Only works for when subnet mask is /24 or less
-                if (ipEndPoint.Address.GetAddressBytes().Last() == 255)
-                    sendDataDestination = null;
-                else
-                    sendDataDestination = ipEndPoint;
+                ipEndPoint = new IPEndPoint(destination, this.localEndPoint.Port);
+                this.endPointCache.Add(destination, ipEndPoint);
             }
 
-            var destinationEndPoint = sendDataDestination ?? this.broadcastEndPoint;
+            // Only works for when subnet mask is /24 or less
+            if (ipEndPoint.Address.GetAddressBytes().Last() == 255)
+                sendDataDestination = null;
+            else
+                sendDataDestination = ipEndPoint;
+        }
 
-            // Reuse a spent send-data object returned by the sender instead of allocating a new
-            // one for every queued packet. Every field is rewritten before use.
-            var pooledSendData = RentSendData();
-            if (pooledSendData != null)
-            {
-                pooledSendData.Destination = destinationEndPoint;
-                pooledSendData.DestinationAddress = GetSocketAddress(destinationEndPoint);
+        var destinationEndPoint = sendDataDestination ?? this.broadcastEndPoint;
 
-                return pooledSendData;
-            }
+        // Reuse a spent send-data object returned by the sender instead of allocating a new
+        // one for every queued packet. Every field is rewritten before use.
+        var pooledSendData = RentSendData();
+        if (pooledSendData != null)
+        {
+            pooledSendData.Destination = destinationEndPoint;
+            pooledSendData.DestinationAddress = GetSocketAddress(destinationEndPoint);
 
-            // Pool empty (startup only) — the constructor serializes the destination itself.
-            return new SendData(destinationEndPoint);
-        },
-        packet.WriteToBuffer,
-        // Shard by universe: every packet for a universe goes out on the same thread and socket, so
-        // that universe's frames stay in order. The header sequence is ignored by receivers, so it
-        // imposes no cross-universe ordering constraint.
-        shardKey);
+            return pooledSendData;
+        }
+
+        // Pool empty (startup only) — the constructor serializes the destination itself.
+        return new SendData(destinationEndPoint);
     }
 
     /// <summary>
