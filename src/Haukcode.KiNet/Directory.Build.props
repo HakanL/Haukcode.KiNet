@@ -1,0 +1,17 @@
+<Project>
+
+  <!--
+    Haukcode.KiNet.csproj and Haukcode.KiNet-Debug.csproj live in the same folder. Without separate
+    intermediate/output folders they overwrite each other's obj\project.assets.json during restore.
+  -->
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'Haukcode.KiNet-Debug'">
+    <BaseIntermediateOutputPath>obj-debug\</BaseIntermediateOutputPath>
+    <BaseOutputPath>bin-debug\</BaseOutputPath>
+  </PropertyGroup>
+
+  <!-- Keep each project from globbing the other's generated files. -->
+  <PropertyGroup>
+    <DefaultItemExcludes>$(DefaultItemExcludes);obj\**;bin\**;obj-debug\**;bin-debug\**</DefaultItemExcludes>
+  </PropertyGroup>
+
+</Project>
