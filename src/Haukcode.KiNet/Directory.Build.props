@@ -1,5 +1,8 @@
 <Project>
 
+  <!-- MSBuild stops at the nearest Directory.Build.props, so pull in the repository-wide one. -->
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+
   <!--
     Haukcode.KiNet.csproj and Haukcode.KiNet-Debug.csproj live in the same folder. Without separate
     intermediate/output folders they overwrite each other's obj\project.assets.json during restore.
