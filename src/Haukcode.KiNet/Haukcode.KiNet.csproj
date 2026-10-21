@@ -16,7 +16,8 @@
     <Description>A simple KiNet library for .NET Core</Description>
     <Copyright></Copyright>
     <PackageTags>KiNet;DMX</PackageTags>
-    <PackageReleaseNotes>1.0.0 - Initial release</PackageReleaseNotes>
+    <!-- Release notes live in CHANGELOG.md at the repository root -->
+    <PackageReleaseNotes>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)../../CHANGELOG.md'))</PackageReleaseNotes>
     <AssemblyVersion>1.0.0.0</AssemblyVersion>
     <FileVersion>1.0.0.0</FileVersion>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
