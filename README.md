@@ -329,6 +329,10 @@ See the [example](example/) directory for complete examples:
 - Important packets can be prioritized
 - Receive buffer size: 20,480 bytes (configurable via `ActualReceiveBufferSize` property)
 
+## Used in production
+
+This library is used in [DMX Core 100](https://dmxcore.com), a DMX lighting controller for permanent installations that runs on Windows, macOS and Linux, or on its own touchscreen hardware. There it drives Color Kinetics fixtures over KiNet v1 and v2.
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit issues or pull requests on [GitHub](https://github.com/HakanL/Haukcode.KiNet).
